@@ -1,0 +1,6 @@
+name: astrbot_plugin_diamond 
+display_name: 钻石插件 
+desc: Basic diamond plugin for Astrbot. 
+version: 1.0.0
+author: ByDiamond
+repo: https://github.com/By-Diamond/astrbot_plugin_diamond
