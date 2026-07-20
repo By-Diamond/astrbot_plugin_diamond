@@ -1,4 +1,5 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api import event
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 import requests
@@ -10,12 +11,13 @@ from astrbot.api.star import Context, Star
 from astrbot.api import logger
 import json
 import os
-from datetime import datetime, date
+from datetime import date
 from typing import Dict, Optional
 from astrbot.api.message_components import Image, At, Plain
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.api import logger
+import aiohttp
 
 @register("钻石插件", " ByDiamond", "Horizon游戏人数获取", "1.0.0")
 class MyPlugin(Star):
@@ -81,6 +83,7 @@ class MyPlugin(Star):
 游玩时长：0小时
 MVP次数：0把"""
         yield event.plain_result(stats_text)
+
 
     def _load_data(self) -> Dict:
         if os.path.exists(self.data_file):
@@ -182,10 +185,29 @@ MVP次数：0把"""
                     message_chain.append(Plain(text=f"剩余今日换老婆次数：{remaining}次"))
                 else:
                     message_chain.append(Plain(text="这是你的最后一个老婆了，要好好对待她哦~"))
-                
+                #build 26.07.20.2新增每日一言
+                hitokoto = await self._fetch_hitokoto()
+                if hitokoto:
+                    message_chain.append(Plain(text=f"\n{hitokoto}"))
+
                 yield event.chain_result(message_chain)
             else:
                 yield event.plain_result("获取失败\nError Code: 002")
+
+    async def _fetch_hitokoto(self) -> str:
+        url = "https://v1.hitokoto.cn/?c=i&encode=json"
+        try:
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        hitokoto = data.get("hitokoto", "")
+                        return f"「 {hitokoto} 」" if hitokoto else ""
+                    return ""
+        except Exception:
+            return ""
+
 
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
