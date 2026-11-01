@@ -2,23 +2,82 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api.message_components import Node, Image, At, Plain
 from astrbot.api import logger
-import requests
-import re
 import random
 import json
 import os
+import socket
 from datetime import date
-from typing import Dict, Optional
+from typing import Dict
 import aiohttp
 import asyncio
 
-@register("钻石插件", " ByDiamond", "Horizon游戏人数获取", "1.0.0")
+# ——————————————————————————————————————————————————————————————————————————————————————————————————————————————————
+# A2S 直查服务器人数（与 SL_Restart 同一套实现）
+# ——————————————————————————————————————————————————————————————————————————————————————————————————————————————————
+
+A2S_INFO = b"\xff\xff\xff\xffTSource Engine Query\x00"
+
+# (服务器名, 地址, 端口) —— 顺序即输出顺序
+HORIZON_SERVERS = [
+    ("无规则轻插件一服", "180.188.21.179", 7777),
+    ("有规则轻插件二服", "180.188.21.179", 7778),
+    ("无规则轻插件三服", "180.188.21.179", 7779),
+    ("有规则轻插件四服", "180.188.21.179", 7780),
+    ("无规则轻插件五服", "180.188.21.179", 7781),
+    ("有规则轻插件六服", "180.188.21.179", 7782),
+    ("有规则轻插件七服", "180.188.21.179", 7783),
+    ("有规则轻插件八服", "180.188.21.179", 7784),
+]
+
+
+def a2s_读取字符串(buf, i):
+    j = buf.index(b"\x00", i)
+    return buf[i:j].decode("utf-8", "replace"), j + 1
+
+
+def a2s_解析(data):
+    """解析 A2S_INFO 回包；挑战包(0x41)/其它异常返回 None。"""
+    if data[:5] != b"\xff\xff\xff\xffI":
+        return None
+    i = 6                      # 4 字节头 + 'I' + 协议号
+    name, i = a2s_读取字符串(data, i)
+    mapname, i = a2s_读取字符串(data, i)
+    i = a2s_读取字符串(data, i)[1]      # folder
+    game, i = a2s_读取字符串(data, i)
+    i += 2                     # appid
+    return {"name": name, "map": mapname, "game": game,
+            "players": data[i], "maxplayers": data[i + 1]}
+
+
+def a2s_查询(host, port, timeout=0.5, retries=1):
+    """在线返回 dict，否则 None。A2S 会间歇性丢包，默认重试 1 次。"""
+    for _ in range(int(retries) + 1):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(timeout)
+        try:
+            s.sendto(A2S_INFO, (host, port))
+            data, _ = s.recvfrom(65535)
+            if data[:5] == b"\xff\xff\xff\xffA":        # 需要挑战码
+                s.sendto(A2S_INFO + data[5:9], (host, port))
+                data, _ = s.recvfrom(65535)
+            info = a2s_解析(data)
+            if info is not None:
+                return info
+        except (socket.timeout, OSError):
+            pass
+        finally:
+            s.close()
+    return None
+
+@register("钻石插件", " ByDiamond", "Horizon游戏人数获取", "1.1.0")
 class MyPlugin(Star):
     # 插件初始化方法与销毁方法
     def __init__(self, context: Context):
         super().__init__(context)
         self.data_file = os.path.join(os.path.dirname(__file__), "wife_data.json")
         self.user_data = self.今日老婆_加载数据()
+        self.loli_data_file = os.path.join(os.path.dirname(__file__), "loli_data.json")
+        self.loli_user_data = self.今日萝莉_加载数据()
         self.loli_messages = [
             "这是你今天的萝莉哦，要好好爱她~",
             "嘿，你的小萝莉已送达，请签收！",
@@ -78,6 +137,7 @@ class MyPlugin(Star):
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
         self.今日老婆_保存数据()
+        self.今日萝莉_保存数据()
 
     # ——————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     # 指令区
@@ -85,58 +145,15 @@ class MyPlugin(Star):
 
     @filter.command("cx", alias={'查询', '查询人数','cs','cxx'})
     async def 指令_查询人数(self, event: AstrMessageEvent):
-        """获取Horizon服务器人数"""
-        url = "https://scp.manghui.net/list/?serverName=hor"
-        try:
-            response = requests.get(url, timeout=10)
-            response.encoding = 'gbk'
-            a = response.text
-        except Exception as e:
-            yield event.plain_result("获取失败\nError Code: 001") # 发送一条纯文本消息
-            return
-        c = ""
-        if a:
-            tr_matches = re.findall(r'<tr[^>]*>(.*?)</tr>', a, re.DOTALL)
-        
-            server_types = [
-                "无规则轻插件一服", "有规则轻插件二服", "无规则轻插件三服",
-                "有规则轻插件四服", "有规则轻插件五服", "有规则轻插件六服",
-                "有规则轻插件七服", "有规则轻插件八服"
-            ]
-    
-            lines = []
-            for i, tr_content in enumerate(tr_matches[1:9], 1):
-                td_matches = re.findall(r'<td[^>]*>(.*?)</td>', tr_content, re.DOTALL)
-                if len(td_matches) >= 4:
-                    people_clean = re.sub(r'<[^>]+>', '', td_matches[3]).strip()
-                    lines.append(f"HORIZON {server_types[i-1]} 在线人数：{people_clean}")
-            
-            c = "\n".join(lines)
-        yield event.plain_result(c) 
-
-    @filter.command("stat")
-    async def 指令_查询数据(self, event: AstrMessageEvent):
-        stats_text = """数据获取失败！
-当前等级：0
-------击杀统计------
-击杀玩家次数：0
-死亡次数：0
-击杀收容物数：0
-对收容物伤害：0
-击杀D级人员数：0
-击杀科学家数：0
-------角色统计------
-成为收容物次数：0
-成为D级人员次数：0
-成为科学家次数：0
-成为设施警卫次数：0
-重生为混沌分裂者次数：0
-重生为九尾狐次数：0
-------其他统计------
-逃离设施次数：0
-游玩时长：0小时
-MVP次数：0把"""
-        yield event.plain_result(stats_text)
+        """获取Horizon服务器人数（A2S 直查）"""
+        results = await asyncio.gather(
+            *(asyncio.to_thread(a2s_查询, host, port) for _, host, port in HORIZON_SERVERS)
+        )
+        lines = []
+        for (server_name, _, _), info in zip(HORIZON_SERVERS, results):
+            people = "离线" if not info else f"{info['players']}/{info['maxplayers']}"
+            lines.append(f"HORIZON {server_name} 在线人数：{people}")
+        yield event.plain_result("\n".join(lines))
 
     # ——————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     # 群消息监听 · 今日老婆功能
@@ -148,23 +165,6 @@ MVP次数：0把"""
         if message_str == "今日老婆" or message_str == "换老婆":
             sender_id = str(event.get_sender_id())
             if not self.今日老婆_是否能换老婆(sender_id):
-                last_wife = self.今日老婆_获取上次老婆信息(sender_id)
-                if last_wife:
-                    qq_number = last_wife["qq"]
-                    nickname = last_wife["nickname"]
-                    avatar_url = f"https://q1.qlogo.cn/g?b=qq&nk={qq_number}&s=640"
-                    message_chain = [
-                        At(qq=event.get_sender_id()),
-                        Plain(text="\n渣男，你今天没老婆了！\n你今天的群友老婆是：\n"),
-                        Image.fromURL(avatar_url),
-                        Plain(text=f"{nickname}({qq_number})")
-                    ]
-                else:
-                    message_chain = [
-                        At(qq=event.get_sender_id()),
-                        Plain(text="\n渣男，你今天没老婆了！")
-                    ]
-                yield event.chain_result(message_chain)
                 return
             
             group = await event.get_group()
@@ -247,9 +247,43 @@ MVP次数：0把"""
             return True
         return False
 
-    def 今日老婆_获取上次老婆信息(self, user_id: str) -> Optional[Dict]:
-        user_info = self.今日老婆_获取用户信息(user_id)
-        return user_info.get("last_wife")
+    # —— 今日萝莉次数（每人每天 2 次） ——
+
+    def 今日萝莉_加载数据(self) -> Dict:
+        if os.path.exists(getattr(self, "loli_data_file", "")):
+            try:
+                with open(self.loli_data_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"[Diamond Plugin]加载Loli数据失败: {e}")
+                return {}
+        return {}
+
+    def 今日萝莉_保存数据(self):
+        try:
+            with open(self.loli_data_file, "w", encoding="utf-8") as f:
+                json.dump(self.loli_user_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[Diamond Plugin]保存Loli数据失败: {e}")
+
+    def 今日萝莉_获取用户信息(self, user_id: str) -> Dict:
+        today = date.today().isoformat()
+        user_info = self.loli_user_data.get(user_id)
+        if user_info is None or user_info.get("date") != today:
+            self.loli_user_data[user_id] = {"date": today, "chances": 2}
+            self.今日萝莉_保存数据()
+        return self.loli_user_data[user_id]
+
+    def 今日萝莉_是否能获取(self, user_id: str) -> bool:
+        return self.今日萝莉_获取用户信息(user_id).get("chances", 0) > 0
+
+    def 今日萝莉_消耗次数(self, user_id: str) -> bool:
+        user_info = self.今日萝莉_获取用户信息(user_id)
+        if user_info.get("chances", 0) > 0:
+            user_info["chances"] -= 1
+            self.今日萝莉_保存数据()
+            return True
+        return False
 
     async def 今日老婆_获取每日一言(self) -> str:
         url = "https://v1.hitokoto.cn/?c=i&encode=json"
@@ -276,20 +310,19 @@ MVP次数：0把"""
         if message_str == "今日萝莉" or message_str == "换萝莉":
             sender_id = event.get_sender_id()
             sender_name = event.get_sender_name()
+            if not self.今日萝莉_是否能获取(str(sender_id)):
+                return
             image_url = await self.今日老婆_获取图片()
+            if not image_url:
+                return
+            self.今日萝莉_消耗次数(str(sender_id))
             random_message = random.choice(self.loli_messages)
 
-            if image_url:
-                content = [
-                    At(qq=sender_id),
-                    Plain(text=f"\n{random_message}\n"),
-                    Image.fromURL(image_url)
-                ]
-            else:
-                content = [
-                    At(qq=sender_id),
-                    Plain(text="\n获取萝莉图片失败了，请稍后再试~")
-                ]
+            content = [
+                At(qq=sender_id),
+                Plain(text=f"\n{random_message}\n"),
+                Image.fromURL(image_url)
+            ]
 
             node = Node(
                 uin=sender_id,
