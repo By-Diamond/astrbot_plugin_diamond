@@ -1,0 +1,23 @@
+{
+  "picture_source": {
+    "description": "今日图图来源：auto 优先本地，无图时使用外部图库",
+    "type": "string",
+    "default": "auto",
+    "options": ["auto", "local", "external"]
+  },
+  "picture_local_dir": {
+    "description": "本地图库目录；相对路径以插件目录为基准，使用容器内路径",
+    "type": "string",
+    "default": "images"
+  },
+  "picture_external_url": {
+    "description": "外部图库接口，支持直接返回图片或 JSON；留空表示未启用",
+    "type": "string",
+    "default": "https://api.yppp.net/pc.php?return=json"
+  },
+  "picture_external_json_field": {
+    "description": "JSON 图片地址字段，支持 data.url 等多级字段",
+    "type": "string",
+    "default": "acgurl"
+  }
+}
