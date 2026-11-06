@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+wife_data.json*
+loli_data.json*
+picture_data.json*
+images/
+server-main.py
